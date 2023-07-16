@@ -1,9 +1,9 @@
-use base64::{engine::general_purpose, Engine as _};
 use clap::Parser;
+use crypto::{digest::Digest, sha1::Sha1};
 use freedesktop_icons::lookup;
 use gdk_pixbuf::{glib::Bytes, Colorspace, Pixbuf};
 use serde::{Deserialize, Serialize};
-use std::{error::Error, sync::Arc};
+use std::{collections::HashMap, env, error::Error, fs::{create_dir, read_dir, remove_file}, path::Path, sync::Arc};
 use zbus::{
     export::futures_util::TryStreamExt,
     zvariant::{Structure, Value},
@@ -18,7 +18,6 @@ struct Notification {
     summary: String,
     body: String,
     icon: String,
-    icon_is_raw: bool,
     urgency: u8,
     id: u32,
 }
@@ -31,14 +30,17 @@ struct Args {
     length: usize,
     /// An additional icon theme to use for icon lookups
     #[arg(short, long)]
-    theme: String,
+    theme: Option<String>,
+    /// Location to save cached icons
+    #[arg(short, long)]
+    cache_dir: Option<String>,
 }
 
 fn lookup_icon(theme: &str, name: &str) -> String {
     match lookup(name)
         .with_cache()
-        .with_theme(theme)
         .with_theme("Adwaita")
+        .with_theme(theme)
         .find()
     {
         Some(s) => s.into_os_string().into_string().unwrap_or(String::new()),
@@ -50,18 +52,20 @@ fn handle_msg(
     msg: &mut Message,
     buffer: &mut Vec<Notification>,
     history: &mut Vec<Notification>,
+    cached_icons: &mut HashMap<String, i64>,
     theme: &str,
+    cache_dir: &str,
 ) -> Result<(), Box<dyn Error>> {
-    let Ok(body) = msg.body::<Structure>() else { return Ok(()) };
-    let fields = body.fields();
+    let body = msg.body::<Structure>();
 
     match msg.message_type() {
-        // Push new notifications to the history stack
         MessageType::MethodCall => {
             if let Some(iface) = msg.interface() {
+                // Push new notifications to the history stack
                 if iface == InterfaceName::try_from("org.freedesktop.Notifications")? {
+                    let body = body.unwrap();
+                    let fields = body.fields();
                     let dict: Value = fields[6].clone();
-                    let mut icon_is_raw = false;
                     buffer.push(Notification {
                         serial: if let Some(s) = msg.primary_header().serial_num() {
                             *s
@@ -85,23 +89,27 @@ fn handle_msg(
                                     } else {
                                         Bytes::from_static(&[])
                                     };
-                                    let mut img = String::from("data:image/png;base64,");
-                                    img.push_str(
-                                        &general_purpose::STANDARD.encode(
-                                            Pixbuf::from_bytes(
-                                                &bytes,
-                                                Colorspace::Rgb,
-                                                bool::try_from(img_fields[3].clone())?,
-                                                i32::try_from(img_fields[4].clone())?,
-                                                i32::try_from(img_fields[0].clone())?,
-                                                i32::try_from(img_fields[1].clone())?,
-                                                i32::try_from(img_fields[2].clone())?,
-                                            )
-                                            .save_to_bufferv("png", &[])?,
-                                        ),
-                                    );
-                                    icon_is_raw = true;
-                                    img
+                                    let mut hasher = Sha1::new();
+                                    hasher.input(&bytes);
+                                    let path = format!("{}/{}.png", cache_dir, hasher.result_str());
+                                    if ! Path::new(&path).exists() {
+                                        Pixbuf::from_bytes(
+                                            &bytes,
+                                            Colorspace::Rgb,
+                                            bool::try_from(img_fields[3].clone())?,
+                                            i32::try_from(img_fields[4].clone())?,
+                                            i32::try_from(img_fields[0].clone())?,
+                                            i32::try_from(img_fields[1].clone())?,
+                                            i32::try_from(img_fields[2].clone())?,
+                                        )
+                                        .savev(
+                                            &path,
+                                            "png",
+                                            &[],
+                                        )?;
+                                    }
+                                    *cached_icons.entry(path.clone()).or_insert(0) += 1;
+                                    path
                                 }
                                 None => lookup_icon(
                                     theme,
@@ -114,7 +122,6 @@ fn handle_msg(
                                 &String::try_from(fields[2].clone()).unwrap_or(String::new()),
                             )
                         },
-                        icon_is_raw,
                         urgency: if let Value::Dict(val) = &dict {
                             match val.get("urgency")? {
                                 Some(i) => *i,
@@ -125,6 +132,46 @@ fn handle_msg(
                         },
                         id: 0,
                     });
+                } else if iface == InterfaceName::try_from("org.dunstproject.cmd0")? {
+                    if let Some(member) = msg.member() {
+                        if member == MemberName::try_from("NotificationRemoveFromHistory")? {
+                            let body = body.unwrap();
+                            let fields = body.fields();
+                            let id = u32::try_from(fields[0].clone())?;
+                            let icon_path = history.iter().find(|x| x.id == id).unwrap().icon.clone();
+                            history.remove(history.iter().position(|x| x.id == id).unwrap());
+
+                            match cached_icons.get_mut(&icon_path) {
+                                None => (),
+                                Some(e) => {
+                                    *e -= 1;
+                                    if *e <= 0 {
+                                        if remove_file(&icon_path).is_err() {
+                                            eprintln!("Failed removing file {}", &icon_path);
+                                        }
+                                        cached_icons.remove(&icon_path);
+                                    }
+                                }
+                            }
+                            cached_icons.remove(&icon_path);
+
+                            if let Err(err) = print_json(history) {
+                                eprintln!("{}", err);
+                            }
+                        } else if member == MemberName::try_from("NotificationClearHistory")? {
+                            buffer.drain(..);
+                            history.drain(..);
+
+                            for (icon, _) in cached_icons.iter_mut() {
+                                if remove_file(icon).is_err() {
+                                    eprintln!("Failed removing file {}", &icon);
+                                }
+                            }
+
+                            cached_icons.drain();
+                            println!("[]");
+                        }
+                    }
                 }
             }
         }
@@ -133,6 +180,12 @@ fn handle_msg(
                 Some(s) => s,
                 None => return Ok(()),
             };
+            let body = if body.is_ok() {
+                body.unwrap()
+            } else {
+                return Ok(())
+            };
+            let fields = body.fields();
             match buffer.iter_mut().find(|x| x.serial == reply_serial) {
                 Some(s) => s.id = u32::try_from(fields[0].clone()).unwrap(),
                 None => return Ok(()),
@@ -141,6 +194,8 @@ fn handle_msg(
         MessageType::Signal => {
             if let Some(member) = msg.member() {
                 if member == MemberName::try_from("NotificationClosed")? {
+                    let body = body.unwrap();
+                    let fields = body.fields();
                     match buffer
                         .iter()
                         .find(|x| x.id == u32::try_from(fields[0].clone()).unwrap())
@@ -150,6 +205,7 @@ fn handle_msg(
                                 history.remove(0);
                             }
                             history.push(s.clone());
+
                             buffer.remove(buffer.iter().position(|x| x.id == s.id).unwrap());
                             if let Err(err) = print_json(history) {
                                 eprintln!("{}", err);
@@ -181,18 +237,30 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
     let mut buffer: Vec<Notification> = Vec::new();
     let mut history: Vec<Notification> = Vec::with_capacity(args.length);
-    let theme = if args.theme.is_empty() {
-        String::from("Adwaita")
-    } else {
-        args.theme
-    };
+    let mut cached_icons: HashMap<String, i64> = HashMap::new();
+    let theme = args.theme.unwrap_or(String::from("Adwaita"));
+    let cache_dir = args.cache_dir.unwrap_or_else(|| {
+        let path = format!("{}/{}", env::var("XDG_CACHE_HOME").unwrap_or(String::from(".")), "disgustang");
+        if ! Path::new(&path).exists() && create_dir(&path).is_err() {
+            panic!("Failed creating cache directory {}", path);
+        }
+        path
+    });
+
+    let paths = read_dir(&cache_dir).unwrap();
+    for p in paths {
+        let p = p.unwrap().path();
+        if remove_file(&p).is_err() {
+            eprintln!("Failed removing file {}", p.display());
+        }
+    }
 
     let rules = [
         "type='method_call',interface='org.freedesktop.Notifications',member='Notify'",
         "type='method_return'",
         "type='signal',interface='org.freedesktop.Notifications',member='NotificationClosed'",
         "type='method_call',interface='org.dunstproject.cmd0',member='NotificationRemoveFromHistory'",
-        "type='method_call',interface='org.dunstproject.cmd0',member='NotificationClearHistory'"
+        "type='method_call',interface='org.dunstproject.cmd0',member='NotificationClearHistory'",
     ];
     let connection = Connection::session().await?;
     connection
@@ -212,7 +280,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Arc::<zbus::Message>::make_mut(&mut msg),
             &mut buffer,
             &mut history,
+            &mut cached_icons,
             &theme,
+            &cache_dir,
         ) {
             eprintln!("{}", err);
         }
