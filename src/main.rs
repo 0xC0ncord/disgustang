@@ -188,8 +188,8 @@ fn handle_msg(
                 Some(s) => s,
                 None => return Ok(()),
             };
-            let body = if body.is_ok() {
-                body.unwrap()
+            let body = if let Ok(body) = body {
+                body
             } else {
                 return Ok(());
             };
