@@ -45,7 +45,7 @@ fn handle_msg(
     msg: &mut Message,
     buffer: &mut Vec<Notification>,
     history: &mut Vec<Notification>,
-    theme: &String,
+    theme: &str,
 ) -> Result<(), Box<dyn Error>> {
     let Ok(body) = msg.body::<Structure>() else { return Ok(()) };
     let fields = body.fields();
@@ -99,13 +99,13 @@ fn handle_msg(
                                     img
                                 }
                                 None => lookup_icon(
-                                    &theme,
+                                    theme,
                                     &String::try_from(fields[2].clone()).unwrap_or(String::new()),
                                 ),
                             }
                         } else {
                             lookup_icon(
-                                &theme,
+                                theme,
                                 &String::try_from(fields[2].clone()).unwrap_or(String::new()),
                             )
                         },
@@ -146,7 +146,7 @@ fn handle_msg(
                             }
                             history.push(s.clone());
                             buffer.remove(buffer.iter().position(|x| x.id == s.id).unwrap());
-                            if let Err(err) = print_json(&history) {
+                            if let Err(err) = print_json(history) {
                                 eprintln!("{}", err);
                             }
                         }
@@ -174,7 +174,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
     let mut buffer: Vec<Notification> = Vec::new();
     let mut history: Vec<Notification> = Vec::with_capacity(args.length);
-    let theme = if args.theme.is_empty() { String::from("Adwaita") } else { args.theme };
+    let theme = if args.theme.is_empty() {
+        String::from("Adwaita")
+    } else {
+        args.theme
+    };
 
     let rules = [
         "type='method_call',interface='org.freedesktop.Notifications',member='Notify'",
@@ -201,7 +205,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Arc::<zbus::Message>::make_mut(&mut msg),
             &mut buffer,
             &mut history,
-            &theme
+            &theme,
         ) {
             eprintln!("{}", err);
         }
