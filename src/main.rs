@@ -166,7 +166,9 @@ fn handle_msg(
 }
 
 fn print_json(history: &Vec<Notification>) -> Result<(), Box<dyn Error>> {
-    let json = match serde_json::to_string(history) {
+    let mut hist = history.clone();
+    hist.reverse();
+    let json = match serde_json::to_string(&hist) {
         Ok(j) => j,
         Err(_) => return Err("Failed history to string conversion".into()),
     };
