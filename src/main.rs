@@ -35,7 +35,12 @@ struct Args {
 }
 
 fn lookup_icon(theme: &str, name: &str) -> String {
-    match lookup(name).with_cache().with_theme(theme).find() {
+    match lookup(name)
+        .with_cache()
+        .with_theme(theme)
+        .with_theme("Adwaita")
+        .find()
+    {
         Some(s) => s.into_os_string().into_string().unwrap_or(String::new()),
         None => String::new(),
     }
