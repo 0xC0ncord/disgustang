@@ -161,7 +161,6 @@ fn handle_msg(
                                     }
                                 }
                             }
-                            cached_icons.remove(&icon_path);
 
                             if let Err(err) = print_json(history) {
                                 eprintln!("{}", err);
