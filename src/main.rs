@@ -3,7 +3,14 @@ use crypto::{digest::Digest, sha1::Sha1};
 use freedesktop_icons::lookup;
 use gdk_pixbuf::{glib::Bytes, Colorspace, Pixbuf};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, env, error::Error, fs::{create_dir, read_dir, remove_file}, path::Path, sync::Arc};
+use std::{
+    collections::HashMap,
+    env,
+    error::Error,
+    fs::{create_dir, read_dir, remove_file},
+    path::Path,
+    sync::Arc,
+};
 use zbus::{
     export::futures_util::TryStreamExt,
     zvariant::{Structure, Value},
@@ -92,7 +99,7 @@ fn handle_msg(
                                     let mut hasher = Sha1::new();
                                     hasher.input(&bytes);
                                     let path = format!("{}/{}.png", cache_dir, hasher.result_str());
-                                    if ! Path::new(&path).exists() {
+                                    if !Path::new(&path).exists() {
                                         Pixbuf::from_bytes(
                                             &bytes,
                                             Colorspace::Rgb,
@@ -138,7 +145,8 @@ fn handle_msg(
                             let body = body.unwrap();
                             let fields = body.fields();
                             let id = u32::try_from(fields[0].clone())?;
-                            let icon_path = history.iter().find(|x| x.id == id).unwrap().icon.clone();
+                            let icon_path =
+                                history.iter().find(|x| x.id == id).unwrap().icon.clone();
                             history.remove(history.iter().position(|x| x.id == id).unwrap());
 
                             match cached_icons.get_mut(&icon_path) {
@@ -183,7 +191,7 @@ fn handle_msg(
             let body = if body.is_ok() {
                 body.unwrap()
             } else {
-                return Ok(())
+                return Ok(());
             };
             let fields = body.fields();
             match buffer.iter_mut().find(|x| x.serial == reply_serial) {
@@ -240,8 +248,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut cached_icons: HashMap<String, i64> = HashMap::new();
     let theme = args.theme.unwrap_or(String::from("Adwaita"));
     let cache_dir = args.cache_dir.unwrap_or_else(|| {
-        let path = format!("{}/{}", env::var("XDG_CACHE_HOME").unwrap_or(String::from(".")), "disgustang");
-        if ! Path::new(&path).exists() && create_dir(&path).is_err() {
+        let path = format!(
+            "{}/{}",
+            env::var("XDG_CACHE_HOME").unwrap_or(String::from(".")),
+            "disgustang"
+        );
+        if !Path::new(&path).exists() && create_dir(&path).is_err() {
             panic!("Failed creating cache directory {}", path);
         }
         path
