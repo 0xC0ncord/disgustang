@@ -79,9 +79,18 @@ fn handle_msg(
                         } else {
                             return Err("Failed getting serial number from message".into());
                         },
-                        appname: String::try_from(fields[0].clone()).unwrap_or(String::new()),
-                        summary: String::try_from(fields[3].clone()).unwrap_or(String::new()),
-                        body: String::try_from(fields[4].clone()).unwrap_or(String::new()),
+                        appname: String::try_from(fields[0].clone()).unwrap_or(String::new())
+                            .replace("&amp;", "&")
+                            .replace("&lt;", "<")
+                            .replace("&gt;", ">"),
+                        summary: String::try_from(fields[3].clone()).unwrap_or(String::new())
+                            .replace("&amp;", "&")
+                            .replace("&lt;", "<")
+                            .replace("&gt;", ">"),
+                        body: String::try_from(fields[4].clone()).unwrap_or(String::new())
+                            .replace("&amp;", "&")
+                            .replace("&lt;", "<")
+                            .replace("&gt;", ">"),
                         icon: if let Value::Dict(val) = &dict {
                             match val.get::<str, Structure>("image-data")? {
                                 Some(i) => {
